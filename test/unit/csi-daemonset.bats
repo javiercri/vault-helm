@@ -62,6 +62,62 @@ load _helpers
   [ "${actual}" = "SomePullPolicy" ]
 }
 
+@test "csi/daemonset: Custom imagePullSecrets" {
+  cd `chart_dir`
+  local object=$(helm template \
+      --show-only templates/csi-daemonset.yaml  \
+      --set "csi.enabled=true" \
+      --set 'global.imagePullSecrets[0].name=foo' \
+      --set 'global.imagePullSecrets[1].name=bar' \
+      . | tee /dev/stderr |
+      yq -r '.spec.template.spec.imagePullSecrets' | tee /dev/stderr)
+
+  local actual=$(echo $object |
+     yq -r '. | length' | tee /dev/stderr)
+  [ "${actual}" = "2" ]
+
+  local actual=$(echo $object |
+     yq -r '.[0].name' | tee /dev/stderr)
+  [ "${actual}" = "foo" ]
+
+  local actual=$(echo $object |
+      yq -r '.[1].name' | tee /dev/stderr)
+  [ "${actual}" = "bar" ]
+}
+
+@test "csi/daemonset: Custom imagePullSecrets - string array" {
+  cd `chart_dir`
+  local object=$(helm template \
+      --show-only templates/csi-daemonset.yaml  \
+      --set "csi.enabled=true" \
+      --set 'global.imagePullSecrets[0]=foo' \
+      --set 'global.imagePullSecrets[1]=bar' \
+      . | tee /dev/stderr |
+      yq -r '.spec.template.spec.imagePullSecrets' | tee /dev/stderr)
+
+  local actual=$(echo $object |
+     yq -r '. | length' | tee /dev/stderr)
+  [ "${actual}" = "2" ]
+
+  local actual=$(echo $object |
+     yq -r '.[0].name' | tee /dev/stderr)
+  [ "${actual}" = "foo" ]
+
+  local actual=$(echo $object |
+      yq -r '.[1].name' | tee /dev/stderr)
+  [ "${actual}" = "bar" ]
+}
+
+@test "csi/daemonset: default imagePullSecrets" {
+  cd `chart_dir`
+  local actual=$(helm template \
+      --show-only templates/csi-daemonset.yaml  \
+      --set "csi.enabled=true" \
+      . | tee /dev/stderr |
+      yq -r '.spec.template.spec.imagePullSecrets' | tee /dev/stderr)
+  [ "${actual}" = "null" ]
+}
+
 # Debug arg
 @test "csi/daemonset: debug arg is configurable" {
   cd `chart_dir`
@@ -79,6 +135,36 @@ load _helpers
       . | tee /dev/stderr |
       yq -r '.spec.template.spec.containers[0].args[1]' | tee /dev/stderr)
   [ "${actual}" = "--debug=true" ]
+}
+
+# Extra args
+@test "csi/daemonset: extra args can be passed" {
+  cd `chart_dir`
+  local actual=$(helm template \
+      --show-only templates/csi-daemonset.yaml \
+      --set "csi.enabled=true" \
+      . | tee /dev/stderr |
+      yq -r '.spec.template.spec.containers[0].args | length' | tee /dev/stderr)
+  [ "${actual}" = "2" ]
+
+  local object=$(helm template \
+      --show-only templates/csi-daemonset.yaml \
+      --set "csi.enabled=true" \
+      --set "csi.extraArgs={--foo=bar,--bar baz,first}" \
+      . | tee /dev/stderr |
+      yq -r '.spec.template.spec.containers[0]')
+  local actual=$(echo $object |
+      yq -r '.args | length' | tee /dev/stderr)
+  [ "${actual}" = "5" ]
+  local actual=$(echo $object |
+      yq -r '.args[2]' | tee /dev/stderr)
+  [ "${actual}" = "--foo=bar" ]
+  local actual=$(echo $object |
+      yq -r '.args[3]' | tee /dev/stderr)
+  [ "${actual}" = "--bar baz" ]
+  local actual=$(echo $object |
+      yq -r '.args[4]' | tee /dev/stderr)
+  [ "${actual}" = "first" ]
 }
 
 # updateStrategy
@@ -177,6 +263,38 @@ load _helpers
   [ "${actual}" = "bar" ]
 }
 
+@test "csi/daemonset: tolerations not set by default" {
+  cd `chart_dir`
+  local actual=$(helm template \
+      --show-only templates/csi-daemonset.yaml  \
+      --set 'csi.enabled=true' \
+      . | tee /dev/stderr |
+      yq '.spec.template.spec | .tolerations? == null' | tee /dev/stderr)
+  [ "${actual}" = "true" ]
+}
+
+@test "csi/daemonset: tolerations can be set as string" {
+  cd `chart_dir`
+  local actual=$(helm template \
+      --show-only templates/csi-daemonset.yaml  \
+      --set 'csi.enabled=true' \
+      --set 'csi.pod.tolerations=foobar' \
+      . | tee /dev/stderr |
+      yq '.spec.template.spec.tolerations == "foobar"' | tee /dev/stderr)
+  [ "${actual}" = "true" ]
+}
+
+@test "csi/daemonset: tolerations can be set as YAML" {
+  cd `chart_dir`
+  local actual=$(helm template \
+      --show-only templates/csi-daemonset.yaml  \
+      --set 'csi.enabled=true' \
+      --set "csi.pod.tolerations[0].foo=bar,csi.pod.tolerations[1].baz=qux" \
+      . | tee /dev/stderr |
+      yq '.spec.template.spec.tolerations == [{"foo": "bar"}, {"baz": "qux"}]' | tee /dev/stderr)
+  [ "${actual}" = "true" ]
+}
+
 #--------------------------------------------------------------------
 # volumes
 
@@ -195,6 +313,68 @@ load _helpers
   local actual=$(echo $object |
       yq -r '.emptyDir' | tee /dev/stderr)
   [ "${actual}" = "{}" ]
+}
+
+@test "csi/daemonset: csi providersDir default" {
+  cd `chart_dir`
+
+  # Test that it defines it
+  local object=$(helm template \
+      --show-only templates/csi-daemonset.yaml  \
+      --set 'csi.enabled=true' \
+      . | tee /dev/stderr |
+      yq -r '.spec.template.spec.volumes[] | select(.name == "providervol")' | tee /dev/stderr)
+
+  local actual=$(echo $object |
+      yq -r '.hostPath.path' | tee /dev/stderr)
+  [ "${actual}" = "/etc/kubernetes/secrets-store-csi-providers" ]
+}
+
+@test "csi/daemonset: csi kubeletRootDir default" {
+  cd `chart_dir`
+
+  # Test that it defines it
+  local object=$(helm template \
+      --show-only templates/csi-daemonset.yaml  \
+      --set 'csi.enabled=true' \
+      . | tee /dev/stderr |
+      yq -r '.spec.template.spec.volumes[] | select(.name == "mountpoint-dir")' | tee /dev/stderr)
+
+  local actual=$(echo $object |
+      yq -r '.hostPath.path' | tee /dev/stderr)
+  [ "${actual}" = "/var/lib/kubelet/pods" ]
+}
+
+@test "csi/daemonset: csi providersDir override " {
+  cd `chart_dir`
+
+  # Test that it defines it
+  local object=$(helm template \
+      --show-only templates/csi-daemonset.yaml  \
+      --set 'csi.enabled=true' \
+      --set 'csi.daemonSet.providersDir=/alt/csi-prov-dir' \
+      . | tee /dev/stderr |
+      yq -r '.spec.template.spec.volumes[] | select(.name == "providervol")' | tee /dev/stderr)
+
+  local actual=$(echo $object |
+      yq -r '.hostPath.path' | tee /dev/stderr)
+  [ "${actual}" = "/alt/csi-prov-dir" ]
+}
+
+@test "csi/daemonset: csi kubeletRootDir override" {
+  cd `chart_dir`
+
+  # Test that it defines it
+  local object=$(helm template \
+      --show-only templates/csi-daemonset.yaml  \
+      --set 'csi.enabled=true' \
+      --set 'csi.daemonSet.kubeletRootDir=/alt/kubelet-root' \
+      . | tee /dev/stderr |
+      yq -r '.spec.template.spec.volumes[] | select(.name == "mountpoint-dir")' | tee /dev/stderr)
+
+  local actual=$(echo $object |
+      yq -r '.hostPath.path' | tee /dev/stderr)
+  [ "${actual}" = "/alt/kubelet-root/pods" ]
 }
 
 #--------------------------------------------------------------------
